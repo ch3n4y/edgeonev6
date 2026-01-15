@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EdgeOne IPv6 动态源站</title>
+  <link href="https://unpkg.com/@tabler/core@latest/dist/css/tabler.min.css" rel="stylesheet"/>
+  <style>
+    body { background: #f4f7fa; }
+    .page-center { max-width: 750px; margin: 30px auto; padding: 0 15px; }
+    .tabler-logo { font-size: 1.5rem; font-weight: 700; color: #206bc4; margin-bottom: 22px; letter-spacing: 0.03em; }
+    .mb-4 { margin-bottom: 1.4rem; }
+    .card-header { font-weight: bold; }
+    .card .card-body { padding-top: 1.1rem; padding-bottom: 1.1rem; }
+    .form-section-hd { font-size: 1.1em; margin-bottom: 8px; font-weight: 600; margin-top: 12px; }
+    .log-box { min-height: 150px; max-height: 300px; overflow: auto; font-family: monospace; font-size: 0.9em; background: #f7fafb; color: #222; padding: 10px; border-radius: 4px; border: 1px solid #e0e0e0; }
+    .status-badge { font-size: 0.95em; }
+    .ipv6-display { font-family: monospace; font-size: 1.05em; color: #206bc4; }
+    .btn-del { padding: 2px 10px; }
+    .table thead th { background: #f4f6fb; }
+    .table-vcenter td, .table-vcenter th { vertical-align: middle; }
+  </style>
+</head>
+<body>
+<div class="page page-center">
+  <div class="tabler-logo text-center mb-3">EdgeOne IPv6 动态源站</div>
+
+  <!-- 状态卡片 -->
+  <div class="card mb-4">
+    <div class="card-header">
+      <div class="card-title">运行状态</div>
+    </div>
+    <div class="card-body">
+      <div id="status" class="mb-3">加载中...</div>
+      <div>
+        <button class="btn btn-primary" onclick="fetchStatus()">刷新状态</button>
+        <button class="btn btn-success ms-2" onclick="runTask()">立即更新</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 配置管理 -->
+  <div class="card mb-4">
+    <div class="card-header">
+      <span class="card-title">配置管理</span>
+    </div>
+    <div class="card-body">
+      <form id="configForm" autocomplete="off">
+        <!-- 腾讯云密钥 -->
+        <div class="form-section-hd">腾讯云密钥</div>
+        <div class="row g-3 mb-3">
+          <div class="col-md-6">
+            <label class="form-label required">SecretId</label>
+            <input class="form-control" type="text" name="SecretId" id="SecretId" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label required">SecretKey</label>
+            <input class="form-control" type="password" name="SecretKey" id="SecretKey" required>
+          </div>
+        </div>
+
+        <!-- EdgeOne配置 -->
+        <div class="form-section-hd d-flex justify-content-between align-items-center">
+          <span>EdgeOne 加速域名配置</span>
+          <button type="button" class="btn btn-outline-primary btn-sm" onclick="addDomainRow()">添加域名</button>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="table table-vcenter table-bordered mb-3" id="DomainsTable">
+            <thead>
+              <tr>
+                <th style="width:40%">站点ID (ZoneId)</th>
+                <th style="width:45%">加速域名</th>
+                <th style="width:15%"></th>
+              </tr>
+            </thead>
+            <tbody>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 网络配置 -->
+        <div class="form-section-hd">网络配置</div>
+        <div class="row g-3 mb-3">
+          <div class="col-md-6">
+            <label class="form-label">选择网卡</label>
+            <select class="form-select" name="InterfaceName" id="InterfaceName">
+              <option value="">自动选择</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">更新间隔(分钟)</label>
+            <input class="form-control" type="number" name="IntervalMin" id="IntervalMin" min="1" value="15">
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-check">
+            <input class="form-check-input" type="checkbox" name="CheckReachable" id="CheckReachable">
+            <span class="form-check-label">检测IPv6公网可达性</span>
+            <small class="form-hint">启用后会通过在线服务验证IPv6地址是否可从公网访问</small>
+          </label>
+        </div>
+
+        <div class="text-end">
+          <button type="submit" class="btn btn-success" id="submitConfig">保存配置</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 日志 -->
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <div class="card-title">运行日志</div>
+      <button class="btn btn-sm btn-outline-secondary" onclick="fetchLogs()">刷新</button>
+    </div>
+    <div class="card-body">
+      <pre class="log-box" id="logs">加载中...</pre>
+    </div>
+  </div>
+</div>
+
+<!-- Toast提示 -->
+<div id="toast" style="
+  display: none; position: fixed; left: 50%; bottom: 50px; min-width: 160px;
+  background: #206bc4; color: #fff; padding: 14px 28px;
+  border-radius: 8px; z-index: 1000; font-size: 1em; transform: translateX(-50%);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+</div>
+
+<script src="https://unpkg.com/@tabler/core@latest/dist/js/tabler.min.js"></script>
+<script>
+// Toast提示
+function showToast(msg, timeout = 2500) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.style.display = "block";
+  clearTimeout(t._hid);
+  t._hid = setTimeout(() => { t.style.display = "none"; }, timeout);
+}
+
+// 域名表格操作
+function addDomainRow(zoneId = "", domainName = "") {
+  const tb = document.getElementById("DomainsTable").getElementsByTagName("tbody")[0];
+  const tr = tb.insertRow();
+  tr.insertCell().innerHTML = `<input type="text" class="form-control" placeholder="zone-xxxxxxxxx" value="${zoneId}">`;
+  tr.insertCell().innerHTML = `<input type="text" class="form-control" placeholder="*.example.com" value="${domainName}">`;
+  tr.insertCell().innerHTML = `<button type="button" class="btn btn-link text-danger btn-del" onclick="this.closest('tr').remove()">移除</button>`;
+}
+
+function setDomainsTable(domains) {
+  const tb = document.getElementById("DomainsTable").getElementsByTagName("tbody")[0];
+  tb.innerHTML = "";
+  if (Array.isArray(domains) && domains.length > 0) {
+    domains.forEach(d => addDomainRow(d.ZoneId || "", d.DomainName || ""));
+  } else {
+    addDomainRow();
+  }
+}
+
+function getDomainsArray() {
+  const tb = document.getElementById("DomainsTable").getElementsByTagName("tbody")[0];
+  return Array.from(tb.querySelectorAll("tr")).map(tr => {
+    const zoneId = tr.cells[0].querySelector("input").value.trim();
+    const domainName = tr.cells[1].querySelector("input").value.trim();
+    return zoneId && domainName ? { ZoneId: zoneId, DomainName: domainName } : null;
+  }).filter(Boolean);
+}
+
+// 获取状态
+function fetchStatus() {
+  const dom = document.getElementById('status');
+  dom.innerHTML = '<span class="text-muted">更新中...</span>';
+  fetch('/api/status').then(r => r.json()).then(res => {
+    const statusClass = res.status === 'error' ? 'bg-red' :
+                        res.status === 'success' ? 'bg-green' :
+                        res.status === 'running' ? 'bg-blue' : 'bg-secondary';
+    const statusText = res.status === 'error' ? '错误' :
+                       res.status === 'success' ? '成功' :
+                       res.status === 'running' ? '运行中' : '等待';
+
+    // 显示域名更新结果
+    let domainsHtml = '';
+    if (res.domains && res.domains.length > 0) {
+      domainsHtml = '<div class="mt-2"><b>域名状态:</b><ul class="mb-0 ps-3">';
+      res.domains.forEach(d => {
+        const icon = d.success ? '✓' : '✗';
+        const color = d.success ? 'text-success' : 'text-danger';
+        domainsHtml += `<li class="${color}"><small>${icon} ${d.domain}: ${d.message}</small></li>`;
+      });
+      domainsHtml += '</ul></div>';
+    }
+
+    dom.innerHTML = `
+      <div class="mb-2">
+        <b>当前IPv6:</b> <span class="ipv6-display">${res.current_ipv6 || '未获取'}</span>
+      </div>
+      <div class="mt-2">
+        <b>状态:</b> <span class="badge ${statusClass} status-badge">${statusText}</span>
+        <span class="text-muted ms-2">${res.message || ''}</span>
+      </div>
+      ${domainsHtml}
+      <div class="mt-1 text-muted small">
+        <b>上次更新:</b> ${res.last_update || '从未'}
+      </div>
+    `;
+  }).catch(() => {
+    dom.innerHTML = '<span class="text-danger">获取状态失败</span>';
+  });
+}
+
+// 获取配置
+function fetchConfig() {
+  fetch('/api/config').then(r => r.json()).then(res => {
+    document.getElementById('SecretId').value = res.SecretId || '';
+    document.getElementById('SecretKey').value = res.SecretKey || '';
+    document.getElementById('IntervalMin').value = res.IntervalMin || 15;
+    document.getElementById('CheckReachable').checked = res.CheckReachable || false;
+
+    // 加载域名列表
+    setDomainsTable(res.Domains || []);
+
+    // 加载网卡列表
+    fetch('/api/interfaces').then(r => r.json()).then(ifaces => {
+      const sel = document.getElementById('InterfaceName');
+      sel.innerHTML = '<option value="">自动选择</option>';
+      ifaces.forEach(i => {
+        const o = document.createElement('option');
+        o.value = o.textContent = i;
+        if (res.InterfaceName === i) o.selected = true;
+        sel.appendChild(o);
+      });
+    });
+  }).catch(() => {
+    showToast("配置加载失败", 2500);
+  });
+}
+
+// 保存配置
+document.getElementById('configForm').onsubmit = function(e) {
+  e.preventDefault();
+
+  const domains = getDomainsArray();
+  if (domains.length === 0) {
+    showToast("请至少添加一个加速域名", 2500);
+    return;
+  }
+
+  const data = {
+    SecretId: this.SecretId.value.trim(),
+    SecretKey: this.SecretKey.value.trim(),
+    Domains: domains,
+    InterfaceName: this.InterfaceName.value,
+    IntervalMin: Number(this.IntervalMin.value) || 15,
+    CheckReachable: this.CheckReachable.checked
+  };
+
+  document.getElementById('submitConfig').disabled = true;
+  fetch('/api/config', {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(data)
+  }).then(r => r.json()).then(d => {
+    showToast(d.message || "配置已保存");
+    document.getElementById('submitConfig').disabled = false;
+    fetchConfig();
+  }).catch(() => {
+    showToast("保存失败", 2500);
+    document.getElementById('submitConfig').disabled = false;
+  });
+};
+
+// 获取日志
+function fetchLogs() {
+  const logsdom = document.getElementById('logs');
+  fetch('/api/logs').then(r => r.json()).then(res => {
+    logsdom.textContent = res.logs || "暂无日志";
+    logsdom.scrollTop = logsdom.scrollHeight;
+  }).catch(() => {
+    logsdom.textContent = "日志加载失败";
+  });
+}
+
+// 立即执行任务
+function runTask() {
+  showToast("正在更新...");
+  fetch('/api/run', { method: "POST" }).then(r => r.json()).then(res => {
+    showToast(res.message || "任务已触发");
+    setTimeout(() => {
+      fetchStatus();
+      fetchLogs();
+    }, 1000);
+  }).catch(() => {
+    showToast("执行失败", 2500);
+  });
+}
+
+// 页面加载
+window.onload = function() {
+  fetchStatus();
+  fetchConfig();
+  fetchLogs();
+  // 定时刷新状态
+  setInterval(fetchStatus, 10000);
+  setInterval(fetchLogs, 15000);
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+services:
+  edgeonev6:
+    image: ghcr.io/ch3n4y/edgeonev6:latest
+    container_name: edgeonev6
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ~/.edgeonev6.config.yaml:/root/.edgeonev6.config.yaml
